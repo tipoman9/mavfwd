@@ -49,6 +49,12 @@ long wait_after_bash=2000; //Time to wait between bash script starts.
 int ChannelPersistPeriodmMS=2000;//time needed for a RC channel value to persist to execute a commands
 
 long aggregate=1;
+/*
+When aggregating packets, we flush when a message that draws artifical horizon (AHI). This shows the minimum size of packets in the buffer in order to flush
+If we need smooth response of the OSD, then set this to 1.
+Value of 3 is a compromise, 3 sequential packets for AHI change will be aggregated, this will save bandwidth, but will reduse the frame rate of the OSD.
+*/
+int minAggPckts=3;
 
 static bool monitor_wfb=false;
 static int temp = false;
@@ -634,7 +640,7 @@ static void process_mavlink(uint8_t* buffer, int count, void *arg){
 				if (
 					((aggregate>=1 && aggregate<50 ) && mavpckts_count>=aggregate ) ||  //if packets more than treshold
 					((aggregate>50 && aggregate<2000 ) && mavbuff_offset>=aggregate ) || //if buffer  more than treshold
-					((mavpckts_count>=3) && message.msgid==MAVLINK_MSG_ID_ATTITUDE )	//MAVLINK_MSG_ID_ATTITUDE will always cause the buffer flushed
+					((mavpckts_count>=minAggPckts) && message.msgid==MAVLINK_MSG_ID_ATTITUDE )	//MAVLINK_MSG_ID_ATTITUDE will always cause the buffer flushed
 				){
 					//flush and send all data
 					if (sendto(out_sock, mavbuf, mavbuff_offset, 0, (struct sockaddr *)&sin_out, sizeof(sin_out)) == -1) {
@@ -937,7 +943,7 @@ int main(int argc, char **argv)
 		{ "master", required_argument, NULL, 'm' },
 		{ "baudrate", required_argument, NULL, 'b' },
 		{ "out", required_argument, NULL, 'o' },
-		{ "aggregate", required_argument, NULL, 'a' },
+		{ "aggregate", required_argument, NULL, 'a' },		
 		{ "in", required_argument, NULL, 'i' },
 		{ "channels", required_argument, NULL, 'c' },
 		{ "wait_time", required_argument, NULL, 'w' },				
@@ -975,17 +981,23 @@ int main(int argc, char **argv)
 			break;
 		case 'a':	
 			aggregate = atoi(optarg);
-			if (aggregate>2000)
+			if (aggregate>100){
+				minAggPckts=aggregate/100;
+				aggregate=aggregate%100;
+
+			}else if (aggregate>2000)
 				aggregate=2000;
 
 			if(aggregate == 0) 
 				printf("No parsing, raw UART to UDP only\n");
-			else if (aggregate<50)
-				printf("Aggregate mavlink pckts in packs of %d \n", aggregate);
-			else if (aggregate>50)
+			else if (aggregate<2000)
+				printf("Aggregate mavlink pckts in packs of %d , AHI change msg will flush after %d packs  \n", aggregate, minAggPckts);
+			
+			else if (aggregate>2000)
 				printf("Aggregate mavlink pckts till buffer reaches %d bytes \n", aggregate);
 						
 		break;
+		
 		case 'c':
 			ch_count = atoi(optarg);
 			if(ch_count == 0) 

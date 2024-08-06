@@ -29,6 +29,10 @@ To protect the system from overloading (when rotating a pot on the Tx ), the scr
 -p option is useful for rotary switches, where each switch step will generate a command till the desired one is reached. In order to avoid this, the channel value must keep its value for a given period in order to be accepted, for example 1000ms. This way if you never stay more than a second on a step of the rotary switch while rotating it, only the last one will be accepted. The drawback is the delay this options adds.
 
 Packets will be aggregated in chunks of 10 into one UDP frame. A MAVLINK_MSG_ID_ATTITUDE from the FC will flush the buffer. 
+When aggregating, minimum buffer size is 3 packets. This can be changed by adding N*100 to the aggregated packet size
+That is, value ```-a 109 ``` means:  Aggretage mavlink message in chunks up to 9. When a MAVLINK_MSG_ID_ATTITUDE is received flush if the current size is >=1.
+This will allow faster Artificial Horizon response.
+
 This way the OSD will be updated with the same rate and no lag will be added.
  -a 15 : will flush the cached messages into one UDP packet after count of message reaches 15
  -a 1024 : will flush the cached messages into one UDP packet total length of all message reaches 1024 bytes
