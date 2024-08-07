@@ -23,9 +23,16 @@
 
 #include "mavlink/common/mavlink.h"
 
+#include "osd/msp/msp.h"
+#include "osd/msp/msp.c" // why the fuck
+#include "osd/msp_displayport_mux.c"
+
+//#include "msp/msp.cpp"
+
 #define MAX_MTU 9000
 
 bool verbose = false;
+bool ParseMSP = false;
 
 const char *default_master = "/dev/ttyAMA0";
 const int default_baudrate = 115200;
@@ -35,6 +42,8 @@ const int RC_CHANNELS = 65; //RC_CHANNELS ( #65 ) for regular MAVLINK RC Channel
 const int RC_CHANNELS_RAW = 35; //RC_CHANNELS_RAW ( #35 ) for ExpressLRS,Crossfire and other RC procotols (https://mavlink.io/en/messages/common.html#RC_CHANNELS_RAW)
 
 
+//if we gonna use MSP parsing
+msp_state_t *rx_msp_state;
 
 uint8_t ch_count = 0;
 uint16_t ch[14];
@@ -74,6 +83,7 @@ static void print_usage()
 	       "  -f --folder      Folder for file mavlink.msg (default is current folder)\n"	       	    
 	       "  -t --temp        Inject SoC temperature into telemetry\n"
 		   "  -d --wfb         Monitors wfb.log file and reports errors via mavlink HUD messages\n"
+		   "  -s --osd         Parse MSP and draw OSD over the video"
 	       "  -v --verbose     Display each packet, default not\n"	       
 	       "  --help         Display this help\n",
 	       default_master, default_baudrate, defualt_out_addr,
@@ -112,7 +122,7 @@ static speed_t speed_by_value(int baudrate)
 uint64_t get_current_time_ms() // in milliseconds
 {
     struct timespec ts;
-    int rc = clock_gettime(CLOCK_MONOTONIC, &ts);
+    int rc = clock_gettime(1 /*CLOCK_MONOTONIC*/, &ts);
     //if (rc < 0) 
 //		return get_current_time_ms_Old();
     return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
@@ -689,24 +699,29 @@ static void serial_read_cb(struct bufferevent *bev, void *arg)
 		//First forward all serial input to UDP.
 		ttl_packets++;
 		ttl_bytes+=packet_len;
+		if (ParseMSP){
+			for(int i=0;i<packet_len;i++)
+				msp_process_data(rx_msp_state, data[i]);
+			//continue;
+		}else{
+	
+			if (!version_shown && ttl_packets%10==3)//If garbage only, give some feedback do diagnose
+				printf("Packets:%d  Bytes:%d\n",ttl_packets,ttl_bytes);
 
-		if (!version_shown && ttl_packets%10==3)//If garbage only, give some feedback do diagnose
-			printf("Packets:%d  Bytes:%d\n",ttl_packets,ttl_bytes);
-
-		if (aggregate==0){
-			if (sendto(out_sock, data, packet_len, 0,
-			   (struct sockaddr *)&sin_out,
-			   sizeof(sin_out)) == -1) {
-					perror("sendto()");
-					event_base_loopbreak(base);
+			if (aggregate==0){
+				if (sendto(out_sock, data, packet_len, 0,
+				(struct sockaddr *)&sin_out,
+				sizeof(sin_out)) == -1) {
+						perror("sendto()");
+						event_base_loopbreak(base);
+				}
 			}
+
+			//Let's try to parse the stream	
+			if (aggregate>0 || ch_count>0)//if no RC channel control needed, only forward the data
+				process_mavlink(data,packet_len, arg);//Let's try to parse the stream		
 		}
-
-		//Let's try to parse the stream	
-		if (aggregate>0 || ch_count>0)//if no RC channel control needed, only forward the data
-			process_mavlink(data,packet_len, arg);//Let's try to parse the stream		
-
-		evbuffer_drain(input, packet_len);
+		evbuffer_drain(input, packet_len);		
 	}
 }
 
@@ -806,11 +821,24 @@ static void temp_read(evutil_socket_t sock, short event, void *arg)
 	last_board_temp=tempo;
 }
 
+static void send_variant_request2(int serial_fd) {
+    uint8_t buffer[6];
+    construct_msp_command(buffer, MSP_CMD_FC_VARIANT, NULL, 0, MSP_OUTBOUND);
+    int  res = write(serial_fd, &buffer, sizeof(buffer));
+	//printf("Sent %d\n", res);
+}
+
+static void poll_msp(evutil_socket_t sock, short event, void *arg)
+{
+	int serial_fd=(int)arg;
+	send_variant_request2(serial_fd);
+}
+
 static int handle_data(const char *port_name, int baudrate,
 		       const char *out_addr, const char *in_addr)
 {
 	struct event_base *base = NULL;
-	struct event *sig_int = NULL, *in_ev = NULL, *temp_tmr = NULL;
+	struct event *sig_int = NULL, *in_ev = NULL, *temp_tmr = NULL, *msp_tmr=NULL;
 	int ret = EXIT_SUCCESS;
 
 	int serial_fd = open(port_name, O_RDWR | O_NOCTTY);
@@ -900,6 +928,12 @@ static int handle_data(const char *port_name, int baudrate,
 		}
 	}
 
+
+	if (ParseMSP&& msp_tmr==NULL){
+		msp_tmr = event_new(base, -1, EV_PERSIST, poll_msp, serial_fd);
+		evtimer_add(msp_tmr, &(struct timeval){.tv_sec = 1} /*&(struct timeval){.tv_usec = 5000000}*/);		
+	}
+
 	event_base_dispatch(base);
 
 err:
@@ -935,6 +969,7 @@ err:
 	return ret;
 }
 
+
 //COMPILE : gcc -o program mavfwd.c -levent -levent_core
 
 int main(int argc, char **argv)
@@ -949,9 +984,10 @@ int main(int argc, char **argv)
 		{ "wait_time", required_argument, NULL, 'w' },				
 		{ "folder", required_argument, NULL, 'f' },						
 		{ "persist", required_argument, NULL, 'p' },
+		{ "osd", no_argument, NULL, 'd' },	
 		{ "verbose", no_argument, NULL, 'v' },		
 		{ "temp", no_argument, NULL, 't' },						
-		{ "wfb", no_argument, NULL, 'j' },		
+		{ "wfb", no_argument, NULL, 'j' },					
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1037,6 +1073,11 @@ int main(int argc, char **argv)
 		case 'v':
 			verbose = true;
 			printf("Verbose mode!");
+			break;	
+
+		case 'd':
+			ParseMSP = true;
+			printf("MSP to OSD mode!");
 			break;			
 
 		case 'h':
@@ -1046,5 +1087,17 @@ int main(int argc, char **argv)
 		}
 	}	
 
+     
+	if (ParseMSP){
+ 		//msp_process_data(rx_msp_state, serial_data[i]);
+		 rx_msp_state = calloc(1, sizeof(msp_state_t));   
+		 rx_msp_state->cb = &rx_msp_callback;   
+		
+
+    	          
+	}
+
 	return handle_data(port_name, baudrate, out_addr, in_addr);
 }
+
+

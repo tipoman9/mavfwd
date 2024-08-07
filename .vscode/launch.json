@@ -7,25 +7,24 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/mavfwd",
-            "args": [
+            "args": [                
                 "--master",
-                "/dev/ttyUSB0",
+                "/dev/ttyUSB2",
                 "--baudrate",
                 "115200",
                 "--out",
-                "127.0.0.1:14550",
-                "--in",
-                "127.0.0.1:0",                
+                "127.0.0.1:14550",                        
                 "--channel",
                 "7",
                 "-a",
                 "5",
+                "--osd",
+                " ",
                 "-f",                
                 "/home/home/",
-                "--wfb",
+                "--wfb",               
                 " "
-          
-                
+
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

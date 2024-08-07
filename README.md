@@ -16,6 +16,7 @@ Usage: mavfwd [OPTIONS]
 -p --persist     How long a channel value must persist to generate a command - for multiposition switches (0ms default)
 -t --temp        Inject SoC temperature into telemetry(HiSilicon and SigmaStart supported)
 -j --wfb         Reports wfb_tx dropped packets as Mavlink messages. wfb_tx console must be redirected to <temp>/wfb.log
+-s --osd         Parse MSP and draw OSD over the video
 -v --verbose     Display each packet, default not       
 --help         Display this help
 ```
